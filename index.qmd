@@ -2,7 +2,7 @@
 title: "Chocolate Chip Cookies"
 execute:
   error: true
-author: "Your Name"
+author: "Joe Stuedemann"
 output: html_document
 ---
 
@@ -12,10 +12,40 @@ First, read in the CSV data of cookie ingredients.
 Make sure that your end-result data has appropriate types for each column - these should match the types provided in the documentation in the README.md file.
 
 ```{r}
+library(tidyverse)
+
+choc_chip_cookie_ingredients <- read_csv("choc_chip_cookie_ingredients.csv")
+
+choc_chip_cookie_ingredients <- choc_chip_cookie_ingredients %>%
+  mutate(
+    Ingredient = as.character(Ingredient),
+    Text = as.character(Text),
+    Recipe_Index = as.character(Recipe_Index),
+    Rating = as.numeric(Rating),
+    Quantity = as.numeric(Quantity),
+    Unit = as.character(Unit)
+  )
+
+glimpse(choc_chip_cookie_ingredients)
 
 ```
 
 ```{python}
+import pandas as pd
+
+# 1. Load data
+cookies = pd.read_csv('choc_chip_cookie_ingredients.csv')
+
+# 2. Type Conversions
+cookies['Ingredient'] = cookies['Ingredient'].astype(str)
+cookies['Text'] = cookies['Text'].astype(str)
+cookies['Recipe_Index'] = cookies['Recipe_Index'].astype(str)
+cookies['Rating'] = pd.to_numeric(cookies['Rating'], errors='coerce')
+cookies['Quantity'] = pd.to_numeric(cookies['Quantity'], errors='coerce')
+cookies['Unit'] = cookies['Unit'].astype(str) 
+
+# 3. Me verifying that this worked
+print(cookies.dtypes)
 
 ```
 
@@ -34,11 +64,11 @@ Exploratory data analysis is the process of getting familiar with your dataset. 
 
 Generate at least 5 questions you might explore using this database of cookie ingredients.
 
-1.
-2. 
-3. 
-4. 
-5. 
+1. What are the "essential ingredients" or the ones that appear in say 85% of all the recipes and therefore what are the rarer ones as well? 
+2. Are there any outlier recipes with unusual quantities? 
+3. What is the salt to sugar ratio in high rated recipes compared to low rated recipes? 
+4. Is there any correlation between the amount of chocolate chips and the overall recipe rating? 
+5. How do the ingredient profiles differ between the sources? (Epicurious vs Allrecipes) 
 
 
 ### Skimming the Data
@@ -53,14 +83,28 @@ Install both packages, and read the package documentation ([R](https://cran.r-pr
 
 
 ```{r}
+library(skimr)
 
+# I'm selecting only specific columns to keep it clean
+choc_chip_cookie_ingredients %>%
+  skim(Rating, Quantity) %>%
+  yank("numeric") # I looked up the 'yanks' command to give me the numeric table specifically so it displays fully
 ```
 
 ```{python}
+from skimpy import skim
+
+# Non-default approach: 
+skim(cookies[['Ingredient', 'Rating', 'Quantity']].iloc[:500])
+
+# Not sure if this is right in terms of skimming but I think I'm able to skim through so I guess that's what matters.  
 
 ```
 
 [Part 2] Write 1-2 sentences about what you can tell from each summary display you generate. Did you discover anything new about the data?
+
+From the R summary, I see that there are 1,010 missing ratings which is kind of big deal when it comes to comparing recipes based off of what ingredients they use. I don't you'd be able to truly narrow down "What makes a good cookie?". The other thing I found in the python summary is the standard deviation for quantity is larger than the mean (2.53 compared to 2.23). This just means that I would need to standardize the measure units to be the same instead of having one with grams and one with cups and so on and so forth. 
+
 
 ### Generating Tables
 
@@ -69,10 +113,64 @@ You may want to use the `dplyr` package in R (`group_by` or `count` functions), 
 
 [Part 1] Using R and Python, generate a table that shows what **proportion** of recipes contain each type of ingredient, for the most common 20 ingredients.
 
+```{r}
+library(dplyr)
+
+# I find the total number of unique recipes
+total_recipes <- n_distinct(choc_chip_cookie_ingredients$Recipe_Index)
+
+# Then I generate the top 20 proportions
+top_20_ingredients_r <- choc_chip_cookie_ingredients %>%
+  group_by(Ingredient) %>%
+  summarize(recipe_count = n_distinct(Recipe_Index)) %>%
+  mutate(proportion = recipe_count / total_recipes) %>%
+  arrange(desc(proportion)) %>%
+  slice_head(n = 20)
+
+print(top_20_ingredients_r)
+```
+
+```{python}
+# First I gotta get the total number of unique recipes
+total_recipes = cookies['Recipe_Index'].nunique()
+
+# I calculate the proportions
+ingredient_proportions = (
+    cookies.groupby('Ingredient')['Recipe_Index']
+    .nunique()
+    .reset_index(name='recipe_count')
+)
+
+ingredient_proportions['proportion'] = ingredient_proportions['recipe_count'] / total_recipes
+
+# Last I get the top 20
+top_20_ingredients_py = ingredient_proportions.sort_values('proportion', ascending=False).head(20)
+
+print(top_20_ingredients_py)
+```
+
 [Part 2] Print out a character string that lists all of the ingredients that do not appear in at least 20 recipes.
 
+```{r}
+rare_ingredients_r <- choc_chip_cookie_ingredients %>%
+  group_by(Ingredient) %>%
+  summarize(count = n_distinct(Recipe_Index)) %>%
+  filter(count < 20) %>%
+  pull(Ingredient)
 
-(Delete this note, but you can include data values inline in markdown text by using backticks, at least in R. For instance, here is R's built in value for pi: `r pi`. Unfortunately, this doesn't work in python using the knitr markdown engine, but you can print the list out in python anyways using a code chunk.)
+# I collapsed it into a single character string so I could just see them all at once
+rare_string_r <- paste(rare_ingredients_r, collapse = ", ")
+cat(rare_string_r)
+```
+
+```{python}
+# I'm going to filter the ingredients appearing in fewer than 20 recipes
+rare_ingredients_py = ingredient_proportions[ingredient_proportions['recipe_count'] < 20]['Ingredient'].tolist()
+
+# Again, putting into one string to make it easier to read. Sure enough, the strings are identical in both R and python
+rare_string_py = ", ".join(rare_ingredients_py)
+print(rare_string_py)
+```
 
 ### Visualization
 
@@ -80,4 +178,32 @@ Using whatever plotting system you are comfortable with in R or python, see if y
 
 [Part 1] Create at least one plot (it doesn't have to be pretty) that showcases an interesting facet of the data.
 
+```{r}
+library(ggplot2)
+library(dplyr)
+
+# I first need to prepare the data: I want it to count ingredients per recipe and get the rating
+recipe_complexity <- choc_chip_cookie_ingredients %>%
+  filter(!is.na(Rating)) %>% # Remove the 1,010 missing ratings
+  group_by(Recipe_Index) %>%
+  summarize(
+    num_ingredients = n(),
+    Rating = first(Rating)
+  )
+
+# 2. Creating the plot in r. 
+ggplot(recipe_complexity, aes(x = num_ingredients, y = Rating)) +
+  geom_point(alpha = 0.5, color = "steelblue") +
+  geom_smooth(method = "lm", color = "red", se = FALSE) + # I added a trend line because I wanted to see it. I made it red for the huskers. 
+  labs(
+    title = "More Ingredients = Better Quality Cookies?",
+    subtitle = "Number of Ingredients vs. Recipe Rating",
+    x = "Number of Ingredients",
+    y = "Rating (0 to 1)"
+  ) +
+  theme_minimal()
+```
+
 [Part 2] Write 2-3 sentences about what you can learn from that plot and what directions you might want to investigate from here.
+
+Looking at the rating, which is simply from 0-1 though it can be converted to 1-10, there's a very little correlation between the number of ingredients and the overall rating. However, you can see that there are many "outliers" since there is a cluster of 10 ingredient recipes that consistently score very high but there are some recipes that do not. The more ingredients does not determine a rating so I'm curious what causes a recipe with the same amount of ingredients to be "bad". Perhaps it's the type of ingredients, which is something I can investigate further. With that, I could also look into the those "Rare ingredient" recipes to see if they score higher than those with more common ingredients as well. 
